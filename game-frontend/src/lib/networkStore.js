@@ -118,6 +118,7 @@ export function initializeWebSocket() {
         return;
     }
     const wsUrl = `ws://localhost:3000/ws`;
+    //a
     //const wsUrl = `ws://${window.location.host}/ws`;
     socket = new WebSocket(wsUrl);
 
