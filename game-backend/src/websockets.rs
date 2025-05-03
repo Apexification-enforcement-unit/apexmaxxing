@@ -171,13 +171,36 @@ fn process_message(msg: Message, who: SocketAddr, state: &Arc<Mutex<GameState>>)
     match msg {
         Message::Text(t) => {
             println!(">>> {who} sent str: {t:?}");
-            let parts: Vec<&str> = t.split_whitespace().collect();
-            if parts.len() == 3 && parts[0] == "move" {
-                if let (Ok(x), Ok(z)) = (parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
-                    println!(">>> Parsed move command from {who}: x={x}, z={z}");
-                    state.lock().unwrap().update_player(who, x, z);
-                } else {
-                    println!(">>> Failed to parse move coordinates from {who}: {t:?}");
+            let parts: Vec<&str> = t.splitn(2, ' ').collect(); // Split into command and the rest
+
+            match parts.as_slice() {
+                // Handle "move x z"
+                ["move", coords_str] => {
+                    let coords: Vec<&str> = coords_str.split_whitespace().collect();
+                    if coords.len() == 2 {
+                        if let (Ok(x), Ok(z)) = (coords[0].parse::<f32>(), coords[1].parse::<f32>()) {
+                            println!(">>> Parsed move command from {who}: x={x}, z={z}");
+                            state.lock().unwrap().update_player(who, x, z);
+                        } else {
+                            println!(">>> Failed to parse move coordinates from {who}: {coords_str:?}");
+                        }
+                    } else {
+                         println!(">>> Invalid move command format from {who}: {t:?}");
+                    }
+                }
+                // Handle "chat message content"
+                ["chat", message_content] => {
+                    if !message_content.trim().is_empty() {
+                        println!(">>> Parsed chat command from {who}: '{message_content}'");
+                        // Add the chat message to the game state
+                        state.lock().unwrap().add_chat_message(who, message_content.to_string());
+                    } else {
+                         println!(">>> Received empty chat message from {who}");
+                    }
+                }
+                // Handle other potential commands or default case
+                _ => {
+                    println!(">>> Received unknown command format from {who}: {t:?}");
                 }
             }
         }

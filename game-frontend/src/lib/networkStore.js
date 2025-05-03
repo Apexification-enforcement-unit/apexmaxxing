@@ -10,6 +10,7 @@ const _signalStrength = writable(0);
 const _avgPing = writable(0.0);
 const _playerCount = writable(0);
 const _otherPlayers = writable({}); 
+const _chatMessages = writable([]); // Store for chat messages { sender: string, message: string }[]
 const _lastError = writable(null);
 
 export const isConnected = readable(_isConnected.value, (set) => {
@@ -34,23 +35,42 @@ export const playerCount = readable(_playerCount.value, (set) => {
 export const otherPlayers = readable(_otherPlayers.value, (set) => {
     return _otherPlayers.subscribe(set);
 });
+export const chatMessages = readable(_chatMessages.value, (set) => { // Export readable chat store
+    return _chatMessages.subscribe(set);
+});
 export const lastError = readable(_lastError.value, (set) => {
     return _lastError.subscribe(set);
 });
 
 
 function parseServerMessage(message) {
-    const parts = message.split(';');
+    let rawChatData = '';
+    let otherData = message;
+
+    // 1. Extract Chat data first
+    const chatSeparatorIndex = message.indexOf(';Chat:');
+    if (chatSeparatorIndex !== -1) {
+        rawChatData = message.substring(chatSeparatorIndex + 6); // Get everything after ";Chat:"
+        otherData = message.substring(0, chatSeparatorIndex); // Get everything before ";Chat:"
+        console.log("[networkStore] Raw chat data extracted:", rawChatData);
+        console.log("[networkStore] Other data extracted:", otherData);
+    }
+
+    // 2. Process Other data
+    const parts = otherData.split(';');
     const data = {};
     const playersData = {};
 
     parts.forEach(part => {
+        if (!part) return; // Skip empty parts
         let key = '';
         let value = '';
 
         const playerSeparatorIndex = part.indexOf(']:');
+
+        // Note: Removed chatSeparatorIndex check here as chat data is already extracted
         if (part.startsWith('P[') && playerSeparatorIndex !== -1) {
-            key = part.substring(0, playerSeparatorIndex + 1); 
+            key = part.substring(0, playerSeparatorIndex + 1);
             value = part.substring(playerSeparatorIndex + 2);
         } else {
             const genericSeparatorIndex = part.indexOf(':');
@@ -58,21 +78,21 @@ function parseServerMessage(message) {
                 key = part.substring(0, genericSeparatorIndex);
                 value = part.substring(genericSeparatorIndex + 1);
             } else {
-                return; 
+                console.warn("[networkStore] Skipping invalid part:", part);
+                return;
             }
         }
 
         if (!key || value === undefined) {
+             console.warn("[networkStore] Skipping part with missing key/value:", part);
             return;
         };
 
         switch (key) {
             case 'Seed':
                 console.log("[networkStore] Received seed ", value);
-
-                _seed.set(value); 
-
-                data.seed = value; 
+                _seed.set(value);
+                data.seed = value;
                 break;
             case 'BalloonHeight':
                 _balloonHeight.set(parseInt(value, 10));
@@ -84,11 +104,11 @@ function parseServerMessage(message) {
                 _avgPing.set(parseFloat(value));
                 break;
             case 'Players':
-                _playerCount.set(parseInt(value, 10)); 
+                _playerCount.set(parseInt(value, 10)+1); // Add 1 for the current player
                 break;
             default:
                 if (key.startsWith('P[') && key.endsWith(']')) {
-                    const playerId = key.substring(2, key.length - 1); 
+                    const playerId = key.substring(2, key.length - 1);
                     const coords = value.split(',');
                     if (coords.length === 2) {
                         const x = parseFloat(coords[0]);
@@ -102,11 +122,38 @@ function parseServerMessage(message) {
                         console.warn(`[networkStore] Invalid coordinates ${playerId}:`, value);
                     }
                 } else {
-                    //forgot why I needed this else
+                    console.warn("[networkStore] Unhandled key:", key);
                 }
                 break;
         }
     });
+
+    // 3. Process Chat data
+    if (rawChatData) {
+        const messages = rawChatData.split(';') // Split the extracted chat string
+            .map(msgPart => {
+                if (!msgPart) return null;
+                const separatorIndex = msgPart.indexOf('>');
+                if (separatorIndex > 0 && separatorIndex < msgPart.length - 1) {
+                    return {
+                        sender: msgPart.substring(0, separatorIndex),
+                        message: msgPart.substring(separatorIndex + 1)
+                    };
+                }
+                console.warn("[networkStore] Invalid chat message part format:", msgPart);
+                return null;
+            })
+            .filter(msg => msg !== null);
+
+        console.log("[networkStore] Parsed chat messages:", messages);
+        _chatMessages.set(messages);
+    } else {
+        // Clear chat messages if the Chat: part is missing entirely
+        if (!message.includes(';Chat:')) {
+             _chatMessages.set([]);
+        }
+    }
+
     console.log("[networkStore] playermaxxing:", JSON.stringify(playersData));
     _otherPlayers.set(playersData);
 }
@@ -141,6 +188,9 @@ export function initializeWebSocket() {
     socket.onclose = (event) => {
         console.log("Disconnected? :", event.code, event.reason);
         _isConnected.set(false);
+        _chatMessages.set([]); // Clear chat on disconnect
+        _otherPlayers.set({});
+        _seed.set(null);
         socket = null;
         
         
@@ -154,6 +204,16 @@ export function sendMove(x, z) {
         socket.send(message);
     } else {
         
+    }
+}
+
+// Function to send a chat message
+export function sendChatMessage(messageContent) {
+    if (socket && socket.readyState === WebSocket.OPEN && messageContent.trim()) {
+        const message = `chat ${messageContent}`; // Define 'chat' command
+        socket.send(message);
+    } else {
+        console.warn("Cannot send chat message. WebSocket not open or message empty.");
     }
 }
 
